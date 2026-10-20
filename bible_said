@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+
+import argparse
+import sqlite3
+import sys
+from terminaltables import AsciiTable
+
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[91m"
+GREEN = "\033[92m"
+GRAY = "\033[90m"
+RESET = "\033[0m"
+
+con = sqlite3.connect("bibles.db")
+cur = con.cursor()
+
+
+def check_version(version_code):
+    res = cur.execute(
+        "SELECT 1 FROM bibles WHERE version_code = ? LIMIT 1", [version_code]
+    )
+    return bool(res.fetchone())
+
+
+def find_text(text, version_code):
+    if not text:
+        return
+    res = cur.execute(
+        "SELECT book, book_abbrev, chapter, verse, quote FROM bibles WHERE version_code = ? AND quote LIKE ? LIMIT 1",
+        [version_code, f"%{text}%"],
+    )
+    found = res.fetchone()
+    if not found:
+        res = cur.execute(
+            "SELECT book, book_abbrev, chapter, verse, quote FROM bibles WHERE version_code = ? AND quote LIKE ? LIMIT 1",
+            [version_code, f"{text}%"],
+        )
+        found = res.fetchone()
+    if not found:
+        res = cur.execute(
+            "SELECT book, book_abbrev, chapter, verse, quote FROM bibles WHERE version_code = ? AND quote LIKE ? LIMIT 1",
+            [version_code, f"%{text}"],
+        )
+        found = res.fetchone()
+    # print(found, text)
+    return found
+
+
+def print_match(match, text):
+    book, book_abbrev, chapter, verse, quote = match
+    position = quote.find(text)
+    replaced = f"{DIM}{GRAY}{quote[:position]}{RESET}{GREEN}{BOLD}{text}{RESET}{DIM}{GRAY}{quote[position+len(text):]}{RESET}"
+    print(f"{DIM}{GRAY}{book} {chapter}:{verse} {replaced}{RESET}")
+
+
+def find_all_text(text, version_code):
+    founds = []
+    not_found = ""
+    if found := find_text(text, version_code):
+        founds.append([found, text])
+
+    else:
+        word_count = len(text.split(" "))
+        for i in range(word_count):
+            sub = " ".join(text.split(" ")[:-i])
+            if found := find_text(sub, version_code):
+                founds.append([found, sub])
+                break
+
+    if founds:
+        more_text = text[len(founds[-1][1]) :].strip()
+        if more_text:
+            more, not_found = find_all_text(more_text, version_code)
+            if more:
+                for i in more:
+                    founds.append(i)
+            else:
+                not_found = more_text
+                # raise Exception(f"'{more_text}' not found!")
+    return founds, not_found
+
+
+def list_versions():
+    results = cur.execute(
+        "SELECT DISTINCT(version_code), version, language FROM bibles;"
+    )
+    table_data = [
+        ["code", "name", "language"],
+    ]
+    for r in results.fetchall():
+        table_data.append(r)
+    table = AsciiTable(table_data)
+    print(table.table)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Bible can say whatever you want")
+
+    parser.add_argument(
+        "--version",
+        type=str,
+        help="Bible version identifier (e.g. en_kjv)",
+        default="en_kjva",
+    )
+
+    parser.add_argument(
+        "--list-versions",
+        action="store_true",
+        help="List all available Bible versions",
+    )
+    parser.add_argument(
+        "text",
+        nargs="*",
+        help="What do you want the bible to say?",
+    )
+
+    args = parser.parse_args()
+
+    if args.list_versions:
+        list_versions()
+        return
+
+    version_code = args.version
+    if version_code and not check_version(version_code):
+        print("Version not found. Run with --list-versions to see options")
+        return
+
+    text = " ".join(args.text)
+
+    if text:
+        findings, not_found = find_all_text(text, version_code)
+        for finding, matched_text in findings:
+            print_match(finding, matched_text)
+        if not_found:
+            print(f"Could not find '{not_found}' 😢")
+
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
